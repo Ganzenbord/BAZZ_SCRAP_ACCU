@@ -36,13 +36,16 @@
 <body>
 <h1>BAZZ accu registratie <span id="count" style="font-size:14px;color:var(--mute)"></span></h1>
 <!-- Versie: bij elke wijziging ophogen, zodat op de telefoon te zien is welke versie er draait. -->
-<div id="ver" style="font-size:12px;color:var(--mute);margin:-8px 0 10px">versie 1.4 · 07-10-2026 · dubbel-controle LN, Ah-controle</div>
+<div id="ver" style="font-size:12px;color:var(--mute);margin:-8px 0 10px">versie 1.6 · 07-10-2026 · Type Saber/HLM, VDM-modus, leveranciers Rightenergy/VDM</div>
+<label style="display:flex;align-items:center;gap:10px;font-size:15px;color:var(--ink);margin:0 0 10px"><input type="checkbox" id="vdmMode" style="width:22px;height:22px"> VDM-modus (alle registraties krijgen Type VDM)</label>
+<div id="vdmBanner" class="hide" style="background:#e8f0fe;color:#0b3d91;border-radius:8px;padding:8px 10px;margin:0 0 10px;font-size:14px;font-weight:600">VDM-modus staat aan: elke registratie krijgt Type VDM.</div>
 
 <div class="card">
   <input type="file" id="file" accept="image/*" capture="environment" class="hide">
   <button id="snap">📷 Foto van serienummer</button>
   <img id="preview" alt="">
   <div id="status"></div>
+  <div id="raw" style="font-size:12px;color:var(--mute);word-break:break-word"></div>
 
   <label for="serial">Serienummer <span style="font-weight:400">· tip: houd het veld ingedrukt en kies "Tekst scannen" (iPhone) of gebruik Google Lens (Android); tik op de foto om in te zoomen</span></label>
   <input type="text" id="serial" autocapitalize="characters" autocomplete="off" spellcheck="false">
@@ -59,9 +62,9 @@
 
   <div class="row">
     <div><label for="sup">Leverancier</label>
-      <select id="sup"><option value="">— kies —</option><option>HLM</option><option>SABER</option><option>VDM</option></select></div>
+      <select id="sup"><option value="">— kies —</option><option>Rightenergy</option><option>VDM</option></select></div>
     <div><label for="typ">Type</label>
-      <select id="typ"><option value="">— kies —</option><option>Rear motor</option><option>Front motor</option><option>VDM</option></select></div>
+      <select id="typ"><option value="">— kies —</option><option>Saber</option><option>HLM</option><option>VDM</option></select></div>
   </div>
 
   <button id="save">Opslaan</button>
@@ -103,6 +106,7 @@ let weights = store.get('weights', {});      // "7" -> 2.5
 let hook = store.get('hook', '');
 let pendingDel = store.get('pendingDel', []);
 let worker = null;
+let vdmMode = store.get('vdmMode', false);   // VDM-modus: elke registratie krijgt Type VDM
 
 const normSerial = s => String(s).toUpperCase().replace(/\s+/g, '');
 /* LN-accu's: gegraveerd "LN-36V22.4AH-G29-EE-WW-0731102" = sticker "LNA22G29EEWW0731102".
@@ -143,17 +147,21 @@ async function processFile(f) {
   try {
     const img = await loadImage(url);
     const canvas = toCanvas(img, 1800);
-    // 1) Google Drive laat de foto lezen via je eigen script (gratis, veel nauwkeuriger); 2) anders lokaal (barcode + Tesseract)
+    // Google Drive laat de foto lezen via je eigen script (gratis, veel nauwkeuriger). Lukt dat, dan is dat het antwoord:
+    // geen trage lokale terugval meer. Alleen zonder Sheet-link (geen Google) wordt de trage lokale herkenning gebruikt.
     let lines = [], codes = [], note = '';
+    $('raw').textContent = '';
     if (hook) {
-      status('Foto laten lezen door Google…');
-      try { lines = await driveOcr(canvas); } catch (err) { note = ' (Google-lezen mislukt: ' + err.message + ')'; }
-    } else note = ' (stel de Sheet-link in bij Instellingen voor betere herkenning)';
-    if (!extractSerials(lines).length) {
-      status('Lokaal lezen…' + note);
+      status('Foto laten lezen door Google… (duurt ongeveer 5-10 seconden)');
+      try {
+        lines = await driveOcr(canvas);
+        $('raw').textContent = lines.length ? 'Google las: ' + lines.map(l => l.text.trim()).join('  |  ').slice(0, 500) : 'Google las geen tekst op deze foto. Probeer een scherpere foto, dichterbij en recht op de tekst.';
+      } catch (err) { note = ' (Google-lezen mislukt: ' + err.message + ' — vul handmatig in)'; }
+    } else {
+      note = ' (stel de Sheet-link in bij Instellingen voor veel betere herkenning)';
+      status('Lokaal lezen… (traag)');
       codes = await readBarcodes(canvas);
-      status('Tekst lezen (eerste keer duurt langer)…');
-      lines = lines.concat(await readText(canvas));
+      lines = await readText(canvas);
     }
     handleResults(codes, lines, note);
   } catch (err) {
@@ -308,15 +316,23 @@ async function readText(canvas) {
 
 /* Foto naar het Apps Script sturen; dat laat Google Drive de tekst lezen (OCR) en geeft de regels terug. */
 async function driveOcr(canvas) {
-  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 45000);
-  try {
-    const image = canvas.toDataURL('image/jpeg', 0.85).split(',')[1];
-    const r = await fetch(hook, { method: 'POST', signal: ctl.signal, headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'ocr', image }) });
-    const j = await r.json();
-    if (!j.ok) throw new Error(j.error || 'onbekende fout');
-    return (j.text || '').split(/\r?\n/).filter(t => t.trim()).map(text => ({ text, conf: 90 }));
-  } catch (e) { throw new Error(e.name === 'AbortError' ? 'te lang gewacht' : e.message); }
-  finally { clearTimeout(timer); }
+  const sc = Math.min(1, 1400 / Math.max(canvas.width, canvas.height));      // kleiner = sneller versturen op mobiel
+  const small = document.createElement('canvas'); small.width = Math.round(canvas.width * sc); small.height = Math.round(canvas.height * sc);
+  small.getContext('2d').drawImage(canvas, 0, 0, small.width, small.height);
+  const image = small.toDataURL('image/jpeg', 0.75).split(',')[1];
+  let lastErr;
+  for (let poging = 1; poging <= 2; poging++) {                               // Google is soms traag of faalt; één keer opnieuw proberen
+    const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 25000);
+    try {
+      if (poging === 2) status('Opnieuw proberen…');
+      const r = await fetch(hook, { method: 'POST', signal: ctl.signal, headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'ocr', image }) });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || 'onbekende fout');
+      return (j.text || '').split(/\r?\n/).filter(t => t.trim()).map(text => ({ text, conf: 90 }));
+    } catch (e) { lastErr = new Error(e.name === 'AbortError' ? 'te lang gewacht' : e.message); }
+    finally { clearTimeout(timer); }
+  }
+  throw lastErr;
 }
 
 // Bekende serienummerpatronen (ook midden in een regel met andere tekst, en met kleine leesfouten)
@@ -324,7 +340,7 @@ const SERIAL_RES = [
   /LN-?\d+V\d+(?:[.,]\d+)?AH-?[G0]29-?[A-Z0-9]{2}-?[A-Z0-9]{2}-?[0-9O]{6,8}/,   // LN gegraveerd
   /(?:LN|N)?A22[G0]29[A-Z0-9]{4}[0-9O]{6,8}/,                                    // LN sticker
   /HLM-?[A-Z0-9]{3,14}AH\d{8}\d{3}/,                                             // HLM gegraveerd
-  /TY\d{14,20}/                                                                  // SABER gegraveerd (TY + cijfers)
+  /TY\d{14,20}/                                                                  // TY gegraveerd (TY + cijfers)
 ];
 function extractSerials(lines) {
   const found = [];
@@ -339,11 +355,14 @@ function handleResults(codes, lines, note) {
   const known = extractSerials(lines);
   const scored = [];
   codes.forEach(c => scored.push([200, normSerial(c)]));
-  if (!known.length) lines.forEach(l => {
-    let t = l.text.replace(/^\s*(S\/?N|SER(?:IAL)?\.?(?:\s*NO\.?)?)\s*[:.#-]?\s*/i, '');
-    t = squash(t).replace(/^[^A-Z0-9]+|[^A-Z0-9]+$/g, '');
-    if (l.conf < (AHRE.test(t) ? 25 : 45) || t.length < 7 || !/\d/.test(t) || !/[A-Z]/.test(t) || !/^[A-Z0-9\-\/.]+$/.test(t)) return;
-    scored.push([l.conf + (AHRE.test(t) ? 100 : 0), t]);
+  if (!known.length) lines.forEach(l => {          // onbekend patroon: bied elke regel en elk woord met cijfers aan als voorstel
+    const words = l.text.trim().split(/\s+/), alleenCijferwoorden = words.every(w => /\d/.test(w));
+    for (let c of [...(alleenCijferwoorden ? [l.text] : []), ...words]) {      // hele regel alleen als elk woord cijfers heeft (bijv. "…20250209 238")
+      c = c.replace(/^\s*(S\/?N|SER(?:IAL)?\.?(?:\s*NO\.?)?)\s*[:.#-]?\s*/i, '');
+      const t = squash(c).replace(/[^A-Z0-9\-\/.]/g, '').replace(/^[^A-Z0-9]+|[^A-Z0-9]+$/g, '');
+      if (l.conf < (AHRE.test(t) ? 25 : 45) || t.length < 6 || !/\d/.test(t)) continue;
+      scored.push([l.conf + Math.min(t.length, 25) + (AHRE.test(t) ? 100 : 0), t]);
+    }
   });
   scored.sort((a, b) => b[0] - a[0]);
   const uniq = known.length ? known.slice(0, 4) : [...new Set(scored.map(s => s[1]))].slice(0, 8);
@@ -397,7 +416,7 @@ $('ah').oninput = () => { ahTyped = true; updateWeight(); };
 $('reset').onclick = clearForm;
 function clearForm() {
   ['serial', 'ah', 'kg'].forEach(i => $(i).value = ''); ahTyped = false;
-  $('sup').value = ''; $('typ').value = ''; autoSup = false;
+  $('sup').value = ''; $('typ').value = ''; autoSup = false; autoTyp = false; applyType();
   $('serialChips').innerHTML = ''; $('ahChips').innerHTML = '';
   $('dupWarn').textContent = ''; $('kgAsk').classList.add('hide');
   $('preview').style.display = 'none'; status('');
@@ -476,23 +495,42 @@ $('saveSet').onclick = () => {
   render(); sync(); alert('Opgeslagen.');
 };
 
-// leverancier/type: laatst gekozen waarde onthouden (handig bij een stapel van dezelfde soort); HLM wordt uit het serienummer afgeleid
-// leverancier: alleen automatisch bij bekende voorvoegsels (LNA = VDM, TY/S = SABER); anders blijft het leeg en kiest de gebruiker zelf
+// leverancier: alleen automatisch bij bekende voorvoegsels (HLM = Rightenergy; LNA, TY of S = VDM); anders blijft het leeg en kiest de gebruiker zelf
 let autoSup = false;
 function supplierFor(serial) {
   const s = canonSerial(serial);
-  if (/^LNA/.test(s)) return 'VDM';
-  if (/^(TY|S)/.test(s)) return 'SABER';
+  if (/^HLM/.test(s)) return 'Rightenergy';
+  if (/^(LNA|TY|S)/.test(s)) return 'VDM';
   return '';
+}
+// type: TY, S en LNA = Saber; HLM = HLM; anders leeg (zelf kiezen). In VDM-modus is het type altijd VDM.
+let autoTyp = false;
+function typeFor(serial) {
+  const s = canonSerial(serial);
+  if (/^HLM/.test(s)) return 'HLM';
+  if (/^(LNA|TY|S)/.test(s)) return 'Saber';
+  return '';
+}
+function applyType() {
+  $('vdmMode').checked = vdmMode; $('vdmBanner').classList.toggle('hide', !vdmMode);
+  if (vdmMode) { $('typ').value = 'VDM'; $('typ').disabled = true; return; }
+  $('typ').disabled = false;
+  const v = typeFor($('serial').value);
+  if (v) { $('typ').value = v; autoTyp = true; }
+  else if (autoTyp) { $('typ').value = ''; autoTyp = false; }
 }
 function applySupplier() {
   const v = supplierFor($('serial').value);
   if (v) { $('sup').value = v; autoSup = true; }
   else if (autoSup) { $('sup').value = ''; autoSup = false; }
+  applyType();
 }
 $('sup').onchange = () => { autoSup = false; };
+$('typ').onchange = () => { autoTyp = false; };
+$('vdmMode').onchange = () => { vdmMode = $('vdmMode').checked; store.set('vdmMode', vdmMode); if (!vdmMode) $('typ').value = ''; autoTyp = false; applyType(); };
 $('serial').addEventListener('input', applySupplier);
 $('serial').addEventListener('change', applySupplier);
+applyType();
 loadSettings(); render(); sync();
 </script>
 </body>
