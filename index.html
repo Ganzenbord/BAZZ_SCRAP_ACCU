@@ -36,7 +36,7 @@
 <body>
 <h1>BAZZ accu registratie <span id="count" style="font-size:14px;color:var(--mute)"></span></h1>
 <!-- Versie: bij elke wijziging ophogen, zodat op de telefoon te zien is welke versie er draait. -->
-<div id="ver" style="font-size:12px;color:var(--mute);margin:-8px 0 10px">versie 2.0 · 07-10-2026 · container = tabblad (ASP 1, ASP 2…), gewichten uit de Sheet</div>
+<div id="ver" style="font-size:12px;color:var(--mute);margin:-8px 0 10px">versie 2.1 · 07-10-2026 · lijst en teller uit de Sheet</div>
 <button id="upd" type="button" class="hide" style="background:#c5221f;margin:0 0 10px">Er staat een nieuwe versie online — tik om te vernieuwen</button>
 <button id="vdmBtn" type="button" class="sec" style="margin:0 0 10px"></button>
 <div class="card" style="padding:10px 12px">
@@ -89,6 +89,7 @@
       <button class="sec" id="csv">Download CSV</button>
       <button class="sec" id="retry">Opnieuw sturen</button>
     </div>
+    <button class="sec" id="refRows">Verversen uit de Sheet</button>
   </details>
 </div>
 
@@ -466,11 +467,14 @@ async function sync() {
   if (!hook) return;
   try {
     while (pendingDel.length) { await post({ action: 'delete', id: pendingDel[0] }); pendingDel.shift(); store.set('pendingDel', pendingDel); }
+    let verstuurd = false;
     for (const r of records) {
       if (r.synced) continue;
+      verstuurd = true;
       await post({ action: 'add', id: r.id, tab: r.tab || 'ASP 1', serial: r.serial, kg: r.kg, ah: r.ah, sup: r.sup, typ: r.typ, date: dateStr(r.ts) });
       r.synced = true; store.set('records', records); render();
     }
+    if (verstuurd) setTimeout(loadRows, 6000);       // even later de Sheet-stand ophalen (daar worden o.a. dubbelen bepaald)
   } catch {} // offline: later opnieuw
 }
 $('retry').onclick = sync;
@@ -551,13 +555,32 @@ async function loadContainers() {
       store.set('containers', containerList); store.set('container', container);
     }
   } catch {}                                       // offline: gebruik wat we al wisten
-  fillContainers();
+  fillContainers(); loadRows();
 }
 async function loadWeights() {
   if (!hook) return;
   try { const j = await call({ action: 'weights' }); if (j.ok) { weights = j.weights; store.set('weights', weights); updateWeight(); } } catch {}
 }
-$('contSel').onchange = () => { container = $('contSel').value; store.set('container', container); render(); };
+/* De Sheet is de waarheid: haal de rijen van de gekozen container op, zodat lijst en teller gelijk zijn aan de Sheet
+   (ook na correcties daar). Wat nog niet is verstuurd, of net is verstuurd, blijft lokaal staan. */
+async function loadRows() {
+  if (!hook) return;
+  try {
+    const j = await call({ action: 'rows', tab: container });
+    if (!j.ok) return;
+    const ids = new Set(j.rows.map(r => r.id)), nu = Date.now();
+    records = records.filter(r => (r.tab || 'ASP 1') !== container || !r.synced || (nu - r.ts < 120000 && !ids.has(r.id)));
+    const have = new Set(records.map(r => r.id));
+    j.rows.forEach(r => {
+      if (have.has(r.id) || pendingDel.includes(r.id)) return;
+      records.push({ id: r.id, tab: container, serial: r.serial, kg: r.kg, ah: r.ah, sup: r.sup, typ: r.typ, ts: parseInt(r.id) || 0, dup: r.dup, synced: true });
+    });
+    records.sort((a, b) => a.ts - b.ts);
+    store.set('records', records); render();
+  } catch {}
+}
+$('refRows').onclick = async () => { await loadRows(); };
+$('contSel').onchange = () => { container = $('contSel').value; store.set('container', container); render(); loadRows(); };
 $('newCont').onclick = async () => {
   const volgende = (() => { const n = Math.max(0, ...containerList.map(x => +x.replace('ASP ', '') || 0)) + 1; return 'ASP ' + n; })();
   if (!hook) return alert('Stel eerst de Sheet-link in bij Instellingen: een nieuwe container is een nieuw tabblad in de Sheet.');
