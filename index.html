@@ -36,7 +36,7 @@
 <body>
 <h1>BAZZ accu registratie <span id="count" style="font-size:14px;color:var(--mute)"></span></h1>
 <!-- Versie: bij elke wijziging ophogen, zodat op de telefoon te zien is welke versie er draait. -->
-<div id="ver" style="font-size:12px;color:var(--mute);margin:-8px 0 10px">versie 1.3 · 07-10-2026 · SABER (TY) herkend</div>
+<div id="ver" style="font-size:12px;color:var(--mute);margin:-8px 0 10px">versie 1.4 · 07-10-2026 · dubbel-controle LN, Ah-controle</div>
 
 <div class="card">
   <input type="file" id="file" accept="image/*" capture="environment" class="hide">
@@ -119,6 +119,8 @@ function canonSerial(raw) {
   if (m) return 'HLM-XNW36V' + m[1] + 'AH' + m[2] + m[3];
   return s;
 }
+// Dubbel-controle: bij LN-nummers zijn de 7 cijfers achteraan uniek; een verlezen letter (bijv. Q als G) mag een dubbel niet verbergen.
+const dupKey = s => { const m = String(s).match(/^LNA22G29[A-Z0-9]{4}(\d{6,8})$/); return m ? 'LN' + m[1] : String(s); };
 const num = s => { const n = parseFloat(String(s).replace(',', '.')); return isFinite(n) ? n : null; };
 const key = n => String(Math.round(n * 100) / 100);
 const fmt = n => String(n).replace('.', ',');
@@ -355,8 +357,12 @@ function handleResults(codes, lines, note) {
   for (const m of txt.matchAll(/(\d{3,6})MAH/g)) ahs.push(key(+m[1] / 1000));
   for (const m of txt.matchAll(/(?<![\dV.,])(\d{1,3}(?:[.,]\d{1,2})?)AH/g)) ahs.push(key(num(m[1])));
   const v = txt.match(/(\d{2})V/), wh = txt.match(/(\d{3,4}(?:[.,]\d)?)WH/);
-  if (v && wh) ahs.push(key(num(wh[1]) / +v[1]));
-  const ahU = [...new Set(ahs)].filter(x => +x > 0 && +x < 200);
+  if (v && wh) {                                  // Wh / V = Ah: controle op een verlezen komma (16,8 gelezen als 168)
+    const calc = num(wh[1]) / +v[1];
+    if (!ahs.length || Math.abs(+ahs[0] - calc) / calc > 0.05) ahs.unshift(key(calc));
+    else ahs.push(key(calc));
+  }
+  const ahU = [...new Set(ahs)].filter(x => +x > 0 && +x <= 100);
   if (ahU.length && !$('ah').value) { $('ah').value = fmt(ahU[0]); updateWeight(); }
   chips($('ahChips'), ahU.map(fmt), t => { $('ah').value = t; updateWeight(); });
 
@@ -366,7 +372,9 @@ function handleResults(codes, lines, note) {
 /* ---------- velden ---------- */
 function checkDup() {
   const s = canonSerial($('serial').value);
-  $('dupWarn').textContent = s && records.some(r => r.serial === s) ? 'ℹ Dit serienummer is al geregistreerd; het wordt als DUBBEL genoteerd.' : '';
+  const same = s && records.find(r => dupKey(r.serial) === dupKey(s));
+  $('dupWarn').textContent = !same ? '' : (same.serial === s ? 'ℹ Dit serienummer is al geregistreerd; het wordt als DUBBEL genoteerd.'
+    : 'ℹ Lijkt op al geregistreerd nummer ' + same.serial + ' (zelfde cijfers); het wordt als DUBBEL genoteerd.');
 }
 function updateWeight() {
   const a = num($('ah').value);
@@ -404,7 +412,7 @@ $('save').onclick = async () => {
   if (!sup || !typ) return alert('Kies leverancier en type.');
   weights[key(ah)] = kg; store.set('weights', weights);
   const ts = Date.now();
-  records.push({ id: ts + '-' + Math.random().toString(36).slice(2, 6), serial, kg, ah, sup, typ, ts, dup: records.some(r => r.serial === serial), synced: false });
+  records.push({ id: ts + '-' + Math.random().toString(36).slice(2, 6), serial, kg, ah, sup, typ, ts, dup: records.some(r => dupKey(r.serial) === dupKey(serial)), synced: false });
   store.set('records', records);
   clearForm(); render(); loadSettings();
   await sync();
