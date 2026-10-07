@@ -36,9 +36,17 @@
 <body>
 <h1>BAZZ accu registratie <span id="count" style="font-size:14px;color:var(--mute)"></span></h1>
 <!-- Versie: bij elke wijziging ophogen, zodat op de telefoon te zien is welke versie er draait. -->
-<div id="ver" style="font-size:12px;color:var(--mute);margin:-8px 0 10px">versie 1.7 · 07-10-2026 · VDM-knop, meldt nieuwe versie</div>
+<div id="ver" style="font-size:12px;color:var(--mute);margin:-8px 0 10px">versie 1.8 · 07-10-2026 · gewichtsteller 400 kg</div>
 <button id="upd" type="button" class="hide" style="background:#c5221f;margin:0 0 10px">Er staat een nieuwe versie online — tik om te vernieuwen</button>
 <button id="vdmBtn" type="button" class="sec" style="margin:0 0 10px"></button>
+<div class="card" style="padding:10px 12px">
+  <div class="row" style="align-items:center">
+    <div id="contTxt" style="font-size:16px;font-weight:600"></div>
+    <button class="small sec" id="newCont" style="flex:0 0 auto">Nieuwe container</button>
+  </div>
+  <div style="height:10px;background:var(--line);border-radius:5px;margin-top:8px;overflow:hidden"><div id="contBar" style="height:100%;width:0;background:var(--ok)"></div></div>
+  <div id="contSub" style="font-size:13px;color:var(--mute);margin-top:6px"></div>
+</div>
 
 <div class="card">
   <input type="file" id="file" accept="image/*" capture="environment" class="hide">
@@ -107,6 +115,11 @@ let hook = store.get('hook', '');
 let pendingDel = store.get('pendingDel', []);
 let worker = null;
 let vdmMode = store.get('vdmMode', false);   // VDM-modus: elke registratie krijgt Type VDM
+/* Containergewicht: maximaal 400 kg. Geteld wordt alles wat sinds "Nieuwe container" is geregistreerd. */
+const MAX_KG = 400, r1 = n => Math.round(n * 10) / 10;
+let contStart = store.get('contStart', 0);
+const contRecs = () => records.filter(r => r.ts >= contStart);
+const contTotal = () => r1(contRecs().reduce((s, r) => s + r.kg, 0));
 
 const normSerial = s => String(s).toUpperCase().replace(/\s+/g, '');
 /* LN-accu's: gegraveerd "LN-36V22.4AH-G29-EE-WW-0731102" = sticker "LNA22G29EEWW0731102".
@@ -429,6 +442,8 @@ $('save').onclick = async () => {
   if (kg === null) return alert('Gewicht ontbreekt — vul het gewicht in.');
   const sup = $('sup').value, typ = $('typ').value;
   if (!sup || !typ) return alert('Kies leverancier en type.');
+  const nieuw = r1(contTotal() + kg);
+  if (nieuw > MAX_KG && !confirm('Let op: met deze accu is de container ' + fmt(nieuw) + ' kg, dat is ' + fmt(r1(nieuw - MAX_KG)) + ' kg boven het maximum van ' + MAX_KG + ' kg.\n\nToch opslaan?')) return;
   weights[key(ah)] = kg; store.set('weights', weights);
   const ts = Date.now();
   records.push({ id: ts + '-' + Math.random().toString(36).slice(2, 6), serial, kg, ah, sup, typ, ts, dup: records.some(r => dupKey(r.serial) === dupKey(serial)), synced: false });
@@ -456,7 +471,20 @@ $('retry').onclick = sync;
 window.addEventListener('online', sync);
 
 /* ---------- lijst / export ---------- */
+function renderContainer() {
+  const t = contTotal(), n = contRecs().length, pct = Math.min(100, t / MAX_KG * 100), left = r1(MAX_KG - t);
+  $('contTxt').textContent = fmt(t) + ' / ' + MAX_KG + ' kg';
+  const bar = $('contBar'); bar.style.width = pct + '%';
+  bar.style.background = t > MAX_KG ? 'var(--bad)' : t >= MAX_KG * 0.9 ? '#e8a100' : 'var(--ok)';
+  $('contSub').textContent = n + ' accu\'s in deze container · ' + (left >= 0 ? 'nog ' + fmt(left) + ' kg ruimte' : fmt(r1(-left)) + ' kg TE ZWAAR');
+  $('contSub').style.color = left < 0 ? 'var(--bad)' : 'var(--mute)';
+}
+$('newCont').onclick = () => {
+  if (!confirm('Nieuwe container beginnen?\n\nDe teller start weer op 0 kg. Al geregistreerde accu\'s blijven in de lijst en in de Google Sheet staan.')) return;
+  contStart = Date.now(); store.set('contStart', contStart); render();
+};
 function render() {
+  renderContainer();
   $('count').textContent = records.length + ' stuks'; $('n2').textContent = records.length;
   const tb = $('tbl').tBodies[0]; tb.innerHTML = '';
   records.slice().reverse().forEach(r => {
