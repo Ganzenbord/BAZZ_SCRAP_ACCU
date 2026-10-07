@@ -172,14 +172,31 @@ async function readBarcodes(canvas) {
   if (!found.size && window.ZXing) {
     const hints = new Map(); hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
     const rd = new ZXing.MultiFormatReader(); rd.setHints(hints);
-    for (const c of [canvas, rot(canvas, 90)]) {
-      try {
-        const bm = new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(new ZXing.HTMLCanvasElementLuminanceSource(c)));
-        found.add(rd.decode(bm).getText()); break;
-      } catch {}
+    // Een scheef gehouden telefoon geeft een barcode die een paar graden gedraaid staat; ZXing vindt die dan
+    // vaak niet. Daarom meerdere kleine hoeken proberen (en dezelfde hoeken ook liggend/staand).
+    const angles = [0, -2, 2, -4, 4, -6, 6, -9, 9, -12, 12];
+    outer: for (const base of [0, 90]) {
+      for (const a of angles) {
+        const c = rotAny(canvas, base + a);
+        await new Promise(r => setTimeout(r, 0));          // houd de pagina responsief
+        try {
+          const bm = new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(new ZXing.HTMLCanvasElementLuminanceSource(c)));
+          found.add(rd.decode(bm).getText()); break outer;
+        } catch {}
+      }
     }
   }
   return [...found];
+}
+/* Draait een canvas om een willekeurige hoek; het canvas groeit mee en de rand wordt wit gevuld. */
+function rotAny(c, deg) {
+  if (!deg) return c;
+  const t = deg * Math.PI / 180, cs = Math.abs(Math.cos(t)), sn = Math.abs(Math.sin(t));
+  const r = document.createElement('canvas');
+  r.width = Math.ceil(c.width * cs + c.height * sn); r.height = Math.ceil(c.width * sn + c.height * cs);
+  const x = r.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, r.width, r.height);
+  x.translate(r.width / 2, r.height / 2); x.rotate(t); x.drawImage(c, -c.width / 2, -c.height / 2);
+  return r;
 }
 
 /* Zoekt rijen losse tekens (gegraveerde of gedrukte tekst) en negeert krassen/structuur.
