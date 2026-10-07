@@ -36,9 +36,9 @@
 <body>
 <h1>BAZZ accu registratie <span id="count" style="font-size:14px;color:var(--mute)"></span></h1>
 <!-- Versie: bij elke wijziging ophogen, zodat op de telefoon te zien is welke versie er draait. -->
-<div id="ver" style="font-size:12px;color:var(--mute);margin:-8px 0 10px">versie 1.6 · 07-10-2026 · Type Saber/HLM, VDM-modus, leveranciers Rightenergy/VDM</div>
-<label style="display:flex;align-items:center;gap:10px;font-size:15px;color:var(--ink);margin:0 0 10px"><input type="checkbox" id="vdmMode" style="width:22px;height:22px"> VDM-modus (alle registraties krijgen Type VDM)</label>
-<div id="vdmBanner" class="hide" style="background:#e8f0fe;color:#0b3d91;border-radius:8px;padding:8px 10px;margin:0 0 10px;font-size:14px;font-weight:600">VDM-modus staat aan: elke registratie krijgt Type VDM.</div>
+<div id="ver" style="font-size:12px;color:var(--mute);margin:-8px 0 10px">versie 1.7 · 07-10-2026 · VDM-knop, meldt nieuwe versie</div>
+<button id="upd" type="button" class="hide" style="background:#c5221f;margin:0 0 10px">Er staat een nieuwe versie online — tik om te vernieuwen</button>
+<button id="vdmBtn" type="button" class="sec" style="margin:0 0 10px"></button>
 
 <div class="card">
   <input type="file" id="file" accept="image/*" capture="environment" class="hide">
@@ -512,7 +512,9 @@ function typeFor(serial) {
   return '';
 }
 function applyType() {
-  $('vdmMode').checked = vdmMode; $('vdmBanner').classList.toggle('hide', !vdmMode);
+  const vb = $('vdmBtn');                          // knop toont de stand: blauw = aan, omlijnd = uit
+  vb.textContent = vdmMode ? 'VDM-modus staat AAN (alle registraties = Type VDM) — tik om uit te zetten' : 'VDM-modus staat uit — tik om aan te zetten';
+  vb.className = vdmMode ? '' : 'sec';
   if (vdmMode) { $('typ').value = 'VDM'; $('typ').disabled = true; return; }
   $('typ').disabled = false;
   const v = typeFor($('serial').value);
@@ -527,7 +529,16 @@ function applySupplier() {
 }
 $('sup').onchange = () => { autoSup = false; };
 $('typ').onchange = () => { autoTyp = false; };
-$('vdmMode').onchange = () => { vdmMode = $('vdmMode').checked; store.set('vdmMode', vdmMode); if (!vdmMode) $('typ').value = ''; autoTyp = false; applyType(); };
+$('vdmBtn').onclick = () => { vdmMode = !vdmMode; store.set('vdmMode', vdmMode); if (!vdmMode) $('typ').value = ''; autoTyp = false; applyType(); };
+// Nieuwe versie melden: de telefoon bewaart de pagina soms; vergelijk met wat online staat.
+$('upd').onclick = () => { location.href = location.pathname + '?v=' + Date.now(); };
+(async () => {
+  try {
+    const r = await fetch(location.pathname + '?nocache=' + Date.now(), { cache: 'no-store' });
+    const m = (await r.text()).match(/id="ver"[^>]*>([^<]*)</);
+    if (m && m[1].trim() !== $('ver').textContent.trim()) $('upd').classList.remove('hide');
+  } catch {}
+})();
 $('serial').addEventListener('input', applySupplier);
 $('serial').addEventListener('change', applySupplier);
 applyType();
