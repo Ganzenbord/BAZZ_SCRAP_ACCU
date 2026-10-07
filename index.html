@@ -103,6 +103,18 @@ let pendingDel = store.get('pendingDel', []);
 let worker = null;
 
 const normSerial = s => String(s).toUpperCase().replace(/\s+/g, '');
+/* LN-accu's: gegraveerd "LN-36V22.4AH-G29-EE-WW-0731102" = sticker "LNA22G29EEWW0731102".
+   Alles wordt naar de stickervorm omgezet, zodat gravering en sticker hetzelfde serienummer geven.
+   In het lettergedeelte wordt een 0 als Q gelezen (sticker "ER0R" = gravering "ER-QR"). */
+const toLetters = t => t.replace(/0/g, 'Q');
+function canonSerial(raw) {
+  const s = String(raw).toUpperCase().replace(/\s+/g, '').replace(/[–—_]/g, '-');
+  let m = s.match(/^LN-?\d+V\d+(?:[.,]\d+)?AH-?G29-?([A-Z0-9]{2})-?([A-Z0-9]{2})-?([0-9O]{6,8})$/);
+  if (m) return 'LNA22G29' + toLetters(m[1] + m[2]) + m[3].replace(/O/g, '0');
+  m = s.match(/^(?:LN|N)?A22G29-?([A-Z0-9]{4})-?([0-9O]{6,8})$/);
+  if (m) return 'LNA22G29' + toLetters(m[1]) + m[2].replace(/O/g, '0');
+  return s;
+}
 const num = s => { const n = parseFloat(String(s).replace(',', '.')); return isFinite(n) ? n : null; };
 const key = n => String(Math.round(n * 100) / 100);
 const fmt = n => String(n).replace('.', ',');
@@ -274,8 +286,8 @@ function handleResults(codes, lines) {
   });
   scored.sort((a, b) => b[0] - a[0]);
   const uniq = [...new Set(scored.map(s => s[1]))].slice(0, 10);
-  if (uniq[0] && !$('serial').value) { $('serial').value = uniq[0]; checkDup(); }
-  chips($('serialChips'), uniq, t => { $('serial').value = t; checkDup(); });
+  if (uniq[0] && !$('serial').value) setSerial(uniq[0]);
+  chips($('serialChips'), uniq.map(canonSerial).filter((t, i, a) => a.indexOf(t) === i), setSerial);
 
   const txt = lines.filter(l => l.conf >= 20).map(l => squash(l.text)).join(' ');
   const ahs = [];
@@ -293,7 +305,7 @@ function handleResults(codes, lines) {
 
 /* ---------- velden ---------- */
 function checkDup() {
-  const s = normSerial($('serial').value);
+  const s = canonSerial($('serial').value);
   $('dupWarn').textContent = s && records.some(r => r.serial === s) ? 'ℹ Dit serienummer is al geregistreerd; het wordt als DUBBEL genoteerd.' : '';
 }
 function updateWeight() {
@@ -304,31 +316,32 @@ function updateWeight() {
   else { $('kg').value = ''; $('kgAsk').classList.remove('hide'); }
 }
 // Staat de Ah in het serienummer (bijv. HLM-XNW36v21ah2025... of LN-36V16.8AH-G29...), dan vullen we die automatisch in.
-$('serial').oninput = () => {
-  checkDup();
-  const m = squash($('serial').value).match(/V(\d+(?:[.,]\d+)?)AH/);
+function deriveAh(raw) {
+  const m = squash(raw).match(/V(\d+(?:[.,]\d+)?)AH/);
   if (m && !ahTyped) { $('ah').value = fmt(key(num(m[1]))); updateWeight(); }
-};
+}
+function setSerial(raw) { deriveAh(raw); $('serial').value = canonSerial(raw); checkDup(); applySupplier(); }
+$('serial').oninput = () => { checkDup(); deriveAh($('serial').value); };
+$('serial').onchange = () => setSerial($('serial').value);   // bij verlaten van het veld omzetten naar stickervorm
 let ahTyped = false;
 $('ah').oninput = () => { ahTyped = true; updateWeight(); };
 
 $('reset').onclick = clearForm;
 function clearForm() {
   ['serial', 'ah', 'kg'].forEach(i => $(i).value = ''); ahTyped = false;
-  const l = store.get('last', {}); $('sup').value = l.sup || ''; $('typ').value = l.typ || '';
+  $('sup').value = ''; $('typ').value = ''; autoSup = false;
   $('serialChips').innerHTML = ''; $('ahChips').innerHTML = '';
   $('dupWarn').textContent = ''; $('kgAsk').classList.add('hide');
   $('preview').style.display = 'none'; status('');
 }
 
 $('save').onclick = async () => {
-  const serial = normSerial($('serial').value), ah = num($('ah').value), kg = num($('kg').value);
+  const serial = canonSerial($('serial').value), ah = num($('ah').value), kg = num($('kg').value);
   if (!serial) return alert('Serienummer ontbreekt.');
   if (ah === null) return alert('Ah ontbreekt.');
   if (kg === null) return alert('Gewicht ontbreekt — vul het gewicht in.');
   const sup = $('sup').value, typ = $('typ').value;
   if (!sup || !typ) return alert('Kies leverancier en type.');
-  store.set('last', { sup, typ });
   weights[key(ah)] = kg; store.set('weights', weights);
   const ts = Date.now();
   records.push({ id: ts + '-' + Math.random().toString(36).slice(2, 6), serial, kg, ah, sup, typ, ts, dup: records.some(r => r.serial === serial), synced: false });
@@ -396,8 +409,22 @@ $('saveSet').onclick = () => {
 };
 
 // leverancier/type: laatst gekozen waarde onthouden (handig bij een stapel van dezelfde soort); HLM wordt uit het serienummer afgeleid
-const last = store.get('last', {}); $('sup').value = last.sup || ''; $('typ').value = last.typ || '';
-$('serial').addEventListener('input', () => { if (/^HLM/.test(normSerial($('serial').value))) $('sup').value = 'HLM'; });
+// leverancier: alleen automatisch bij bekende voorvoegsels (LNA = VDM, TY/S = SABER); anders blijft het leeg en kiest de gebruiker zelf
+let autoSup = false;
+function supplierFor(serial) {
+  const s = canonSerial(serial);
+  if (/^LNA/.test(s)) return 'VDM';
+  if (/^(TY|S)/.test(s)) return 'SABER';
+  return '';
+}
+function applySupplier() {
+  const v = supplierFor($('serial').value);
+  if (v) { $('sup').value = v; autoSup = true; }
+  else if (autoSup) { $('sup').value = ''; autoSup = false; }
+}
+$('sup').onchange = () => { autoSup = false; };
+$('serial').addEventListener('input', applySupplier);
+$('serial').addEventListener('change', applySupplier);
 loadSettings(); render(); sync();
 </script>
 </body>
