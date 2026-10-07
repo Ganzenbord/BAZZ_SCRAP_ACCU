@@ -36,7 +36,7 @@
 <body>
 <h1>BAZZ accu registratie <span id="count" style="font-size:14px;color:var(--mute)"></span></h1>
 <!-- Versie: bij elke wijziging ophogen, zodat op de telefoon te zien is welke versie er draait. -->
-<div id="ver" style="font-size:12px;color:var(--mute);margin:-8px 0 10px">versie 1.8 · 07-10-2026 · gewichtsteller 400 kg</div>
+<div id="ver" style="font-size:12px;color:var(--mute);margin:-8px 0 10px">versie 1.9 · 07-10-2026 · melding nieuwe container vanaf 380 kg</div>
 <button id="upd" type="button" class="hide" style="background:#c5221f;margin:0 0 10px">Er staat een nieuwe versie online — tik om te vernieuwen</button>
 <button id="vdmBtn" type="button" class="sec" style="margin:0 0 10px"></button>
 <div class="card" style="padding:10px 12px">
@@ -46,6 +46,7 @@
   </div>
   <div style="height:10px;background:var(--line);border-radius:5px;margin-top:8px;overflow:hidden"><div id="contBar" style="height:100%;width:0;background:var(--ok)"></div></div>
   <div id="contSub" style="font-size:13px;color:var(--mute);margin-top:6px"></div>
+  <div id="contWarn" class="hide" style="margin-top:8px;padding:8px 10px;border-radius:8px;font-weight:600;font-size:14px"></div>
 </div>
 
 <div class="card">
@@ -116,7 +117,7 @@ let pendingDel = store.get('pendingDel', []);
 let worker = null;
 let vdmMode = store.get('vdmMode', false);   // VDM-modus: elke registratie krijgt Type VDM
 /* Containergewicht: maximaal 400 kg. Geteld wordt alles wat sinds "Nieuwe container" is geregistreerd. */
-const MAX_KG = 400, r1 = n => Math.round(n * 10) / 10;
+const MAX_KG = 400, WARN_KG = 380, r1 = n => Math.round(n * 10) / 10;
 let contStart = store.get('contStart', 0);
 const contRecs = () => records.filter(r => r.ts >= contStart);
 const contTotal = () => r1(contRecs().reduce((s, r) => s + r.kg, 0));
@@ -442,13 +443,14 @@ $('save').onclick = async () => {
   if (kg === null) return alert('Gewicht ontbreekt — vul het gewicht in.');
   const sup = $('sup').value, typ = $('typ').value;
   if (!sup || !typ) return alert('Kies leverancier en type.');
-  const nieuw = r1(contTotal() + kg);
+  const voor = contTotal(), nieuw = r1(voor + kg);
   if (nieuw > MAX_KG && !confirm('Let op: met deze accu is de container ' + fmt(nieuw) + ' kg, dat is ' + fmt(r1(nieuw - MAX_KG)) + ' kg boven het maximum van ' + MAX_KG + ' kg.\n\nToch opslaan?')) return;
   weights[key(ah)] = kg; store.set('weights', weights);
   const ts = Date.now();
   records.push({ id: ts + '-' + Math.random().toString(36).slice(2, 6), serial, kg, ah, sup, typ, ts, dup: records.some(r => dupKey(r.serial) === dupKey(serial)), synced: false });
   store.set('records', records);
   clearForm(); render(); loadSettings();
+  if (voor < WARN_KG && nieuw >= WARN_KG && nieuw <= MAX_KG) alert('Container is bijna vol: ' + fmt(nieuw) + ' van ' + MAX_KG + ' kg.\n\nZet een nieuwe container klaar.');
   await sync();
 };
 
@@ -475,9 +477,16 @@ function renderContainer() {
   const t = contTotal(), n = contRecs().length, pct = Math.min(100, t / MAX_KG * 100), left = r1(MAX_KG - t);
   $('contTxt').textContent = fmt(t) + ' / ' + MAX_KG + ' kg';
   const bar = $('contBar'); bar.style.width = pct + '%';
-  bar.style.background = t > MAX_KG ? 'var(--bad)' : t >= MAX_KG * 0.9 ? '#e8a100' : 'var(--ok)';
+  bar.style.background = t > MAX_KG ? 'var(--bad)' : t >= WARN_KG ? '#e8a100' : 'var(--ok)';
   $('contSub').textContent = n + ' accu\'s in deze container · ' + (left >= 0 ? 'nog ' + fmt(left) + ' kg ruimte' : fmt(r1(-left)) + ' kg TE ZWAAR');
   $('contSub').style.color = left < 0 ? 'var(--bad)' : 'var(--mute)';
+  const w = $('contWarn');
+  w.classList.toggle('hide', t < WARN_KG);
+  if (t >= WARN_KG) {
+    const over = t > MAX_KG;
+    w.textContent = over ? '⚠ Container is te zwaar — begin een nieuwe container' : '⚠ Bijna vol (' + fmt(t) + ' kg) — zet een nieuwe container klaar';
+    w.style.background = over ? '#fde7e7' : '#fff4d6'; w.style.color = over ? '#8a1f1d' : '#5c4300';
+  }
 }
 $('newCont').onclick = () => {
   if (!confirm('Nieuwe container beginnen?\n\nDe teller start weer op 0 kg. Al geregistreerde accu\'s blijven in de lijst en in de Google Sheet staan.')) return;
