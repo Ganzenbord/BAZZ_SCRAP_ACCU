@@ -36,10 +36,11 @@
 <body>
 <h1>BAZZ accu registratie <span id="count" style="font-size:14px;color:var(--mute)"></span></h1>
 <!-- Versie: bij elke wijziging ophogen, zodat op de telefoon te zien is welke versie er draait. -->
-<div id="ver" style="font-size:12px;color:var(--mute);margin:-8px 0 10px">versie 1.9 · 07-10-2026 · melding nieuwe container vanaf 380 kg</div>
+<div id="ver" style="font-size:12px;color:var(--mute);margin:-8px 0 10px">versie 2.0 · 07-10-2026 · container = tabblad (ASP 1, ASP 2…), gewichten uit de Sheet</div>
 <button id="upd" type="button" class="hide" style="background:#c5221f;margin:0 0 10px">Er staat een nieuwe versie online — tik om te vernieuwen</button>
 <button id="vdmBtn" type="button" class="sec" style="margin:0 0 10px"></button>
 <div class="card" style="padding:10px 12px">
+  <select id="contSel" aria-label="Container (tabblad in de Sheet)" style="margin-bottom:8px"></select>
   <div class="row" style="align-items:center">
     <div id="contTxt" style="font-size:16px;font-weight:600"></div>
     <button class="small sec" id="newCont" style="flex:0 0 auto">Nieuwe container</button>
@@ -96,8 +97,8 @@
     <summary>Instellingen</summary>
     <label for="hook">Google Sheets webhook-URL (Apps Script)</label>
     <input type="url" id="hook" placeholder="https://script.google.com/macros/s/.../exec">
-    <label for="wt">Gewichtstabel (Ah=kg, één per regel)</label>
-    <textarea id="wt" placeholder="7=2.5&#10;60=16.2"></textarea>
+    <p style="font-size:13px;color:var(--mute)">Het voorgestelde gewicht per Ah komt uit het tabblad "Gewichten" in de Sheet. Pas het daar aan; de app leest het bij het openen.</p>
+    <button class="sec" id="refW">Gewichten opnieuw ophalen</button>
     <button id="saveSet">Instellingen opslaan</button>
   </details>
 </div>
@@ -111,15 +112,16 @@ const store = {
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
 };
 let records = store.get('records', []);      // {id, serial, kg, ah, ts, dup, synced}
-let weights = store.get('weights', {});      // "7" -> 2.5
+let weights = store.get('weights', {});      // "7" -> 2.5; wordt uit het tabblad "Gewichten" van de Sheet gehaald
+let container = store.get('container', 'ASP 1');          // huidige container = tabblad in de Sheet (ASP 1, ASP 2, ...)
+let containerList = store.get('containers', ['ASP 1']);
 let hook = store.get('hook', '');
 let pendingDel = store.get('pendingDel', []);
 let worker = null;
 let vdmMode = store.get('vdmMode', false);   // VDM-modus: elke registratie krijgt Type VDM
-/* Containergewicht: maximaal 400 kg. Geteld wordt alles wat sinds "Nieuwe container" is geregistreerd. */
+/* Containergewicht: maximaal 400 kg. Geteld wordt alles wat in de huidige container (= tabblad) is geregistreerd. */
 const MAX_KG = 400, WARN_KG = 380, r1 = n => Math.round(n * 10) / 10;
-let contStart = store.get('contStart', 0);
-const contRecs = () => records.filter(r => r.ts >= contStart);
+const contRecs = () => records.filter(r => (r.tab || 'ASP 1') === container);
 const contTotal = () => r1(contRecs().reduce((s, r) => s + r.kg, 0));
 
 const normSerial = s => String(s).toUpperCase().replace(/\s+/g, '');
@@ -445,11 +447,13 @@ $('save').onclick = async () => {
   if (!sup || !typ) return alert('Kies leverancier en type.');
   const voor = contTotal(), nieuw = r1(voor + kg);
   if (nieuw > MAX_KG && !confirm('Let op: met deze accu is de container ' + fmt(nieuw) + ' kg, dat is ' + fmt(r1(nieuw - MAX_KG)) + ' kg boven het maximum van ' + MAX_KG + ' kg.\n\nToch opslaan?')) return;
-  weights[key(ah)] = kg; store.set('weights', weights);
+  // Alleen een nieuwe Ah wordt onthouden (het script zet hem ook in het tabblad "Gewichten"). Een afwijkend gewicht van één accu
+  // overschrijft de tabel niet meer; wijzig het voorgestelde gewicht in de Sheet.
+  if (weights[key(ah)] === undefined) { weights[key(ah)] = kg; store.set('weights', weights); }
   const ts = Date.now();
-  records.push({ id: ts + '-' + Math.random().toString(36).slice(2, 6), serial, kg, ah, sup, typ, ts, dup: records.some(r => dupKey(r.serial) === dupKey(serial)), synced: false });
+  records.push({ id: ts + '-' + Math.random().toString(36).slice(2, 6), tab: container, serial, kg, ah, sup, typ, ts, dup: records.some(r => dupKey(r.serial) === dupKey(serial)), synced: false });
   store.set('records', records);
-  clearForm(); render(); loadSettings();
+  clearForm(); render();
   if (voor < WARN_KG && nieuw >= WARN_KG && nieuw <= MAX_KG) alert('Container is bijna vol: ' + fmt(nieuw) + ' van ' + MAX_KG + ' kg.\n\nZet een nieuwe container klaar.');
   await sync();
 };
@@ -464,7 +468,7 @@ async function sync() {
     while (pendingDel.length) { await post({ action: 'delete', id: pendingDel[0] }); pendingDel.shift(); store.set('pendingDel', pendingDel); }
     for (const r of records) {
       if (r.synced) continue;
-      await post({ action: 'add', id: r.id, serial: r.serial, kg: r.kg, ah: r.ah, sup: r.sup, typ: r.typ, date: dateStr(r.ts) });
+      await post({ action: 'add', id: r.id, tab: r.tab || 'ASP 1', serial: r.serial, kg: r.kg, ah: r.ah, sup: r.sup, typ: r.typ, date: dateStr(r.ts) });
       r.synced = true; store.set('records', records); render();
     }
   } catch {} // offline: later opnieuw
@@ -475,7 +479,7 @@ window.addEventListener('online', sync);
 /* ---------- lijst / export ---------- */
 function renderContainer() {
   const t = contTotal(), n = contRecs().length, pct = Math.min(100, t / MAX_KG * 100), left = r1(MAX_KG - t);
-  $('contTxt').textContent = fmt(t) + ' / ' + MAX_KG + ' kg';
+  $('contTxt').textContent = container + ' · ' + fmt(t) + ' / ' + MAX_KG + ' kg';
   const bar = $('contBar'); bar.style.width = pct + '%';
   bar.style.background = t > MAX_KG ? 'var(--bad)' : t >= WARN_KG ? '#e8a100' : 'var(--ok)';
   $('contSub').textContent = n + ' accu\'s in deze container · ' + (left >= 0 ? 'nog ' + fmt(left) + ' kg ruimte' : fmt(r1(-left)) + ' kg TE ZWAAR');
@@ -488,15 +492,12 @@ function renderContainer() {
     w.style.background = over ? '#fde7e7' : '#fff4d6'; w.style.color = over ? '#8a1f1d' : '#5c4300';
   }
 }
-$('newCont').onclick = () => {
-  if (!confirm('Nieuwe container beginnen?\n\nDe teller start weer op 0 kg. Al geregistreerde accu\'s blijven in de lijst en in de Google Sheet staan.')) return;
-  contStart = Date.now(); store.set('contStart', contStart); render();
-};
 function render() {
   renderContainer();
-  $('count').textContent = records.length + ' stuks'; $('n2').textContent = records.length;
+  const list = contRecs();                                                    // de lijst toont de huidige container
+  $('count').textContent = list.length + ' stuks in ' + container; $('n2').textContent = list.length;
   const tb = $('tbl').tBodies[0]; tb.innerHTML = '';
-  records.slice().reverse().forEach(r => {
+  list.slice().reverse().forEach(r => {
     const tr = tb.insertRow();
     tr.insertCell().textContent = r.serial + (r.dup ? ' (DUBBEL)' : '') + ' · ' + (r.sup || '?') + ' / ' + (r.typ || '?');
     tr.insertCell().textContent = fmt(r.kg);
@@ -513,24 +514,63 @@ function render() {
   });
 }
 $('csv').onclick = () => {
-  const rows = [['Serienummer', 'Gewicht (kg)', 'AH', 'Leverancier', 'Type', 'Datum', 'Dubbel'], ...records.map(r => [r.serial, r.kg, r.ah, r.sup || '', r.typ || '', dateStr(r.ts), r.dup ? 'DUBBEL' : ''])];
+  const rows = [['Container', 'Serienummer', 'Gewicht (kg)', 'AH', 'Leverancier', 'Type', 'Datum', 'Dubbel'], ...records.map(r => [r.tab || 'ASP 1', r.serial, r.kg, r.ah, r.sup || '', r.typ || '', dateStr(r.ts), r.dup ? 'DUBBEL' : ''])];
   const csv = '﻿' + rows.map(r => r.map(v => '"' + String(v).replace(/"/g, '""') + '"').join(';')).join('\r\n');
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
   a.download = 'accu-registratie.csv'; a.click();
 };
 
 /* ---------- instellingen ---------- */
-function loadSettings() {
-  $('hook').value = hook;
-  $('wt').value = Object.entries(weights).map(([k, v]) => k + '=' + v).join('\n');
-}
+function loadSettings() { $('hook').value = hook; }
 $('saveSet').onclick = () => {
   hook = $('hook').value.trim(); store.set('hook', hook);
-  const w = {};
-  $('wt').value.split('\n').forEach(l => { const [a, b] = l.split('='); const A = num(a || ''), B = num(b || ''); if (A !== null && B !== null) w[key(A)] = B; });
-  weights = w; store.set('weights', weights);
-  render(); sync(); alert('Opgeslagen.');
+  render(); sync(); loadContainers(); loadWeights(); alert('Opgeslagen.');
 };
+
+/* ---------- containers (tabbladen) en gewichten uit de Sheet ---------- */
+async function call(body, ms) {                    // vraag iets aan het script en lees het antwoord
+  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), ms || 40000);
+  try {
+    const r = await fetch(hook, { method: 'POST', signal: ctl.signal, headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body) });
+    return await r.json();
+  } finally { clearTimeout(timer); }
+}
+function fillContainers() {
+  const sel = $('contSel'); sel.innerHTML = '';
+  if (!containerList.includes(container)) containerList.push(container);
+  containerList.forEach(n => { const o = document.createElement('option'); o.textContent = n; sel.appendChild(o); });
+  sel.value = container; render();
+}
+async function loadContainers() {
+  if (!hook) return fillContainers();
+  try {
+    const j = await call({ action: 'containers' });
+    if (j.ok && j.tabs.length) {
+      containerList = j.tabs;
+      if (!containerList.includes(container)) container = containerList[containerList.length - 1];   // nieuwste container
+      store.set('containers', containerList); store.set('container', container);
+    }
+  } catch {}                                       // offline: gebruik wat we al wisten
+  fillContainers();
+}
+async function loadWeights() {
+  if (!hook) return;
+  try { const j = await call({ action: 'weights' }); if (j.ok) { weights = j.weights; store.set('weights', weights); updateWeight(); } } catch {}
+}
+$('contSel').onchange = () => { container = $('contSel').value; store.set('container', container); render(); };
+$('newCont').onclick = async () => {
+  const volgende = (() => { const n = Math.max(0, ...containerList.map(x => +x.replace('ASP ', '') || 0)) + 1; return 'ASP ' + n; })();
+  if (!hook) return alert('Stel eerst de Sheet-link in bij Instellingen: een nieuwe container is een nieuw tabblad in de Sheet.');
+  if (!confirm('Nieuwe container "' + volgende + '" beginnen?\n\nEr komt een nieuw tabblad in de Sheet en de teller start weer op 0 kg. Eerdere accu\'s blijven in hun eigen tabblad staan.')) return;
+  $('newCont').disabled = true;
+  try {
+    const j = await call({ action: 'newContainer' }, 30000);
+    if (!j.ok) throw new Error(j.error || 'mislukt');
+    containerList = j.tabs; container = j.name; store.set('containers', containerList); store.set('container', container); fillContainers();
+  } catch (e) { alert('Container aanmaken mislukt (' + e.message + '). Controleer je verbinding en probeer opnieuw.'); }
+  $('newCont').disabled = false;
+};
+$('refW').onclick = async () => { await loadWeights(); alert('Gewichten opgehaald (' + Object.keys(weights).length + ' Ah-waarden).'); };
 
 // leverancier: alleen automatisch bij bekende voorvoegsels (HLM = Rightenergy; LNA, TY of S = VDM); anders blijft het leeg en kiest de gebruiker zelf
 let autoSup = false;
@@ -579,7 +619,7 @@ $('upd').onclick = () => { location.href = location.pathname + '?v=' + Date.now(
 $('serial').addEventListener('input', applySupplier);
 $('serial').addEventListener('change', applySupplier);
 applyType();
-loadSettings(); render(); sync();
+loadSettings(); fillContainers(); sync(); loadContainers(); loadWeights();
 </script>
 </body>
 </html>
