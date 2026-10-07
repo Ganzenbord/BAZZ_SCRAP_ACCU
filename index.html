@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>BAZZ Accu Registratie</title>
+<style>
+  :root { --bg:#f4f5f7; --card:#fff; --ink:#1b1f24; --mute:#6b7280; --acc:#0b6bcb; --ok:#188038; --bad:#c5221f; --line:#d9dce1; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#14171a; --card:#1f2327; --ink:#eceff3; --mute:#98a1ad; --line:#363c43; } }
+  * { box-sizing:border-box; }
+  body { margin:0; font:16px/1.4 system-ui,sans-serif; background:var(--bg); color:var(--ink); padding:12px; max-width:560px; margin:auto; }
+  h1 { font-size:18px; margin:4px 0 12px; display:flex; justify-content:space-between; align-items:center; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px; margin-bottom:12px; }
+  label { display:block; font-size:13px; color:var(--mute); margin:10px 0 4px; }
+  input[type=text], input[type=number], input[type=url], textarea { width:100%; padding:12px; font-size:18px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--ink); }
+  textarea { font-size:14px; min-height:90px; }
+  select { width:100%; padding:12px; font-size:17px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--ink); }
+  button { font-size:17px; padding:13px 16px; border:0; border-radius:10px; background:var(--acc); color:#fff; width:100%; margin-top:8px; }
+  button.sec { background:transparent; color:var(--acc); border:1px solid var(--acc); }
+  button.small { width:auto; padding:6px 10px; font-size:14px; margin:0; }
+  button:disabled { opacity:.5; }
+  .row { display:flex; gap:8px; } .row > * { flex:1; }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
+  .chip { background:var(--bg); border:1px solid var(--acc); color:var(--acc); border-radius:16px; padding:6px 12px; font-size:15px; width:auto; margin:0; }
+  #preview { width:100%; max-height:200px; object-fit:contain; border-radius:8px; margin-top:8px; display:none; background:#000; }
+  #status { font-size:14px; color:var(--mute); margin-top:6px; min-height:20px; }
+  .warn { color:var(--bad); font-size:14px; margin-top:6px; }
+  .ask { background:#fff4d6; color:#5c4300; border-radius:8px; padding:8px; margin-top:8px; font-size:14px; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  td, th { padding:6px 4px; border-bottom:1px solid var(--line); text-align:left; word-break:break-all; }
+  .sync-ok { color:var(--ok); } .sync-wait { color:var(--bad); }
+  details summary { cursor:pointer; font-weight:600; }
+  .hide { display:none; }
+</style>
+</head>
+<body>
+<h1>BAZZ accu registratie <span id="count" style="font-size:14px;color:var(--mute)"></span></h1>
+
+<div class="card">
+  <input type="file" id="file" accept="image/*" capture="environment" class="hide">
+  <button id="snap">📷 Foto van serienummer</button>
+  <img id="preview" alt="">
+  <div id="status"></div>
+
+  <label for="serial">Serienummer <span style="font-weight:400">· tip: houd het veld ingedrukt en kies "Tekst scannen" (iPhone) of gebruik Google Lens (Android); tik op de foto om in te zoomen</span></label>
+  <input type="text" id="serial" autocapitalize="characters" autocomplete="off" spellcheck="false">
+  <div class="chips" id="serialChips"></div>
+  <div class="warn" id="dupWarn"></div>
+
+  <label for="ah">Capaciteit (Ah)</label>
+  <input type="text" id="ah" inputmode="decimal" autocomplete="off">
+  <div class="chips" id="ahChips"></div>
+
+  <label for="kg">Gewicht (kg)</label>
+  <input type="text" id="kg" inputmode="decimal" autocomplete="off">
+  <div class="ask hide" id="kgAsk">Gewicht voor deze Ah is nog niet bekend. Vul het in; het wordt onthouden voor de volgende keer.</div>
+
+  <div class="row">
+    <div><label for="sup">Leverancier</label>
+      <select id="sup"><option value="">— kies —</option><option>HLM</option><option>SABER</option><option>VDM</option></select></div>
+    <div><label for="typ">Type</label>
+      <select id="typ"><option value="">— kies —</option><option>Rear motor</option><option>Front motor</option><option>VDM</option></select></div>
+  </div>
+
+  <button id="save">Opslaan</button>
+  <button class="sec" id="reset">Wissen</button>
+</div>
+
+<div class="card">
+  <details open>
+    <summary>Geregistreerd (<span id="n2">0</span>)</summary>
+    <table id="tbl"><thead><tr><th>Serienr</th><th>kg</th><th>Ah</th><th></th><th></th></tr></thead><tbody></tbody></table>
+    <div class="row">
+      <button class="sec" id="csv">Download CSV</button>
+      <button class="sec" id="retry">Opnieuw sturen</button>
+    </div>
+  </details>
+</div>
+
+<div class="card">
+  <details>
+    <summary>Instellingen</summary>
+    <label for="hook">Google Sheets webhook-URL (Apps Script)</label>
+    <input type="url" id="hook" placeholder="https://script.google.com/macros/s/.../exec">
+    <label for="wt">Gewichtstabel (Ah=kg, één per regel)</label>
+    <textarea id="wt" placeholder="7=2.5&#10;60=16.2"></textarea>
+    <button id="saveSet">Instellingen opslaan</button>
+  </details>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script src="https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const store = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
+};
+let records = store.get('records', []);      // {id, serial, kg, ah, ts, dup, synced}
+let weights = store.get('weights', {});      // "7" -> 2.5
+let hook = store.get('hook', '');
+let pendingDel = store.get('pendingDel', []);
+let worker = null;
+
+const normSerial = s => String(s).toUpperCase().replace(/\s+/g, '');
+const num = s => { const n = parseFloat(String(s).replace(',', '.')); return isFinite(n) ? n : null; };
+const key = n => String(Math.round(n * 100) / 100);
+const fmt = n => String(n).replace('.', ',');
+const status = t => $('status').textContent = t;
+
+function chips(el, items, onPick) {
+  el.innerHTML = '';
+  items.forEach(t => { const b = document.createElement('button'); b.className = 'chip'; b.textContent = t; b.onclick = () => onPick(t); el.appendChild(b); });
+}
+
+/* ---------- foto verwerken ---------- */
+$('preview').onclick = () => { const p = $('preview'); p.style.maxHeight = p.style.maxHeight === 'none' ? '200px' : 'none'; };
+$('snap').onclick = () => { $('file').value = ''; $('file').click(); };
+$('file').onchange = e => { const f = e.target.files[0]; if (f) processFile(f); };
+
+async function processFile(f) {
+  const url = URL.createObjectURL(f);
+  $('preview').src = url; $('preview').style.display = 'block';
+  $('snap').disabled = true;
+  try {
+    const img = await loadImage(url);
+    const canvas = toCanvas(img, 1800);
+    status('Barcode zoeken…');
+    const codes = await readBarcodes(canvas);
+    status('Tekst lezen (eerste keer duurt langer)…');
+    const lines = await readText(canvas);
+    handleResults(codes, lines);
+  } catch (err) {
+    status('Lezen mislukt: ' + err.message + ' — vul handmatig in.');
+  }
+  $('snap').disabled = false;
+}
+
+function loadImage(url) { return new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('afbeelding')); i.src = url; }); }
+function toCanvas(img, max) {
+  const s = Math.min(1, max / Math.max(img.width, img.height));
+  const c = document.createElement('canvas');
+  c.width = Math.round(img.width * s); c.height = Math.round(img.height * s);
+  c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+  return c;
+}
+const rot = (c, deg) => {
+  if (!deg) return c;
+  const r = document.createElement('canvas'), sw = deg === 180;
+  r.width = sw ? c.width : c.height; r.height = sw ? c.height : c.width;
+  const x = r.getContext('2d'); x.translate(r.width / 2, r.height / 2); x.rotate(deg * Math.PI / 180);
+  x.drawImage(c, -c.width / 2, -c.height / 2); return r;
+};
+
+async function readBarcodes(canvas) {
+  const found = new Set();
+  if ('BarcodeDetector' in window) {
+    try { const r = await new BarcodeDetector().detect(canvas); r.forEach(b => b.rawValue && found.add(b.rawValue)); } catch {}
+  }
+  if (!found.size && window.ZXing) {
+    const hints = new Map(); hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+    const rd = new ZXing.MultiFormatReader(); rd.setHints(hints);
+    for (const c of [canvas, rot(canvas, 90)]) {
+      try {
+        const bm = new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(new ZXing.HTMLCanvasElementLuminanceSource(c)));
+        found.add(rd.decode(bm).getText()); break;
+      } catch {}
+    }
+  }
+  return [...found];
+}
+
+/* Zoekt rijen losse tekens (gegraveerde of gedrukte tekst) en negeert krassen/structuur.
+   bright=true: tekst lichter dan achtergrond (gravering op zwart); false: donkere tekst op licht label.
+   Geeft per gevonden tekstregel een schoon zwart-op-wit canvas terug. */
+function findTextLines(c, bright) {
+  const w = c.width, h = c.height, max = Math.max(w, h);
+  const g = document.createElement('canvas'); g.width = w; g.height = h;
+  const gx = g.getContext('2d'); gx.filter = 'grayscale(1)'; gx.drawImage(c, 0, 0);
+  const bl = document.createElement('canvas'); bl.width = w; bl.height = h;
+  const bx = bl.getContext('2d'); bx.filter = 'grayscale(1) blur(' + Math.round(max / 70) + 'px)'; bx.drawImage(c, 0, 0);
+  const a = gx.getImageData(0, 0, w, h).data, b = bx.getImageData(0, 0, w, h).data;
+  const bin = new Uint8Array(w * h);
+  for (let i = 0; i < bin.length; i++) { const d = a[i * 4] - b[i * 4]; bin[i] = (bright ? d > 22 : d < -22) ? 1 : 0; }
+
+  const lab = new Uint8Array(w * h), stack = new Int32Array(w * h), comps = [];
+  const lo = max * 0.008, hi = max * 0.12;
+  for (let s = 0; s < bin.length; s++) {
+    if (!bin[s] || lab[s]) continue;
+    let sp = 0, n = 0, x0 = w, x1 = 0, y0 = h, y1 = 0; const px = [];
+    stack[sp++] = s; lab[s] = 1;
+    while (sp) {
+      const p = stack[--sp]; px.push(p); n++; const x = p % w, y = (p / w) | 0;
+      if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const nx = x + dx, ny = y + dy; if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+        const q = ny * w + nx; if (bin[q] && !lab[q]) { lab[q] = 1; stack[sp++] = q; }
+      }
+    }
+    const bw = x1 - x0 + 1, bh = y1 - y0 + 1, size = Math.max(bw, bh), fill = n / (bw * bh);
+    if (size > hi || size < 4) continue;
+    const isLetter = size >= lo && fill > 0.12 && Math.min(bw, bh) >= 3;
+    const isBar = !isLetter && fill > 0.6 && Math.max(bw, bh) / Math.min(bw, bh) >= 2 && size >= lo * 0.4;
+    if (isLetter || isBar) comps.push({ px, x0, x1, y0, y1, cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, size, bar: isBar });
+  }
+  // letters die in een rij staan (horizontaal of verticaal) horen bij elkaar
+  const L = comps.filter(k => !k.bar), par = L.map((_, i) => i), nbc = L.map(() => 0);
+  const find = i => par[i] === i ? i : (par[i] = find(par[i]));
+  for (let i = 0; i < L.length; i++) for (let j = i + 1; j < L.length; j++) {
+    const k = L[i], o = L[j], r = o.size / k.size, dx = Math.abs(o.cx - k.cx), dy = Math.abs(o.cy - k.cy);
+    if (r < 0.55 || r > 1.8 || Math.hypot(dx, dy) > 2.6 * k.size) continue;
+    if ((dy < 0.6 * k.size && dx > 0.3 * k.size) || (dx < 0.6 * k.size && dy > 0.3 * k.size)) { nbc[i]++; nbc[j]++; par[find(i)] = find(j); }
+  }
+  const groups = new Map();
+  L.forEach((k, i) => { if (nbc[i] >= 1) { const r = find(i); if (!groups.has(r)) groups.set(r, []); groups.get(r).push(k); } });
+  const out = [];
+  for (const mem of groups.values()) {
+    if (mem.length < 6) continue;
+    const sizes = mem.map(k => k.size).sort((p, q) => p - q), med = sizes[sizes.length >> 1];
+    let x0 = Math.min(...mem.map(k => k.x0)), x1 = Math.max(...mem.map(k => k.x1)), y0 = Math.min(...mem.map(k => k.y0)), y1 = Math.max(...mem.map(k => k.y1));
+    const vertical = (y1 - y0) > (x1 - x0);
+    const all = mem.slice();
+    const mcx = mem.reduce((s, k) => s + k.cx, 0) / mem.length, mcy = mem.reduce((s, k) => s + k.cy, 0) / mem.length;
+    for (const k of comps) {                      // streepjes (koppelteken) die op dezelfde regel liggen
+      if (!k.bar || k.size < 0.3 * med || k.cx < x0 - med || k.cx > x1 + med || k.cy < y0 - med || k.cy > y1 + med) continue;
+      if (vertical ? Math.abs(k.cx - mcx) < 0.4 * med : Math.abs(k.cy - mcy) < 0.4 * med) all.push(k);
+    }
+    for (const k of all) { x0 = Math.min(x0, k.x0); x1 = Math.max(x1, k.x1); y0 = Math.min(y0, k.y0); y1 = Math.max(y1, k.y1); }
+    const sc = Math.max(0.6, Math.min(3, 70 / med)), m = Math.round(med * 0.7);
+    const cw = x1 - x0 + 1 + 2 * m, ch = y1 - y0 + 1 + 2 * m;
+    const small = document.createElement('canvas'); small.width = cw; small.height = ch;
+    const sx = small.getContext('2d'), id = sx.createImageData(cw, ch); id.data.fill(255);
+    for (const k of all) for (const p of k.px) { const i = ((((p / w) | 0) - y0 + m) * cw + (p % w - x0 + m)) * 4; id.data[i] = id.data[i + 1] = id.data[i + 2] = 0; }
+    sx.putImageData(id, 0, 0);
+    const big = document.createElement('canvas'); big.width = Math.round(cw * sc); big.height = Math.round(ch * sc);
+    const bgx = big.getContext('2d'); bgx.fillStyle = '#fff'; bgx.fillRect(0, 0, big.width, big.height); bgx.drawImage(small, 0, 0, big.width, big.height);
+    out.push({ canvas: big, vertical, n: mem.length });
+  }
+  return out.sort((p, q) => q.n - p.n).slice(0, 4);
+}
+const AHRE = /\d+V\d+(?:[.,]\d+)?AH/;
+const squash = s => s.toUpperCase().replace(/\s+/g, '');
+
+async function readText(canvas) {
+  if (!window.Tesseract) throw new Error('OCR niet geladen (internet nodig)');
+  if (!worker) {
+    worker = await Tesseract.createWorker('eng');
+    await worker.setParameters({ tessedit_pageseg_mode: '7', tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-./:' });
+  }
+  const all = [];
+  for (const bright of [true, false]) {           // lichte gravering op donker, of donkere print op licht
+    status('Tekstregels zoeken…');
+    await new Promise(r => setTimeout(r, 30));
+    for (const ln of findTextLines(canvas, bright)) {
+      let best = null;
+      for (const deg of (ln.vertical ? [90, 270] : [0, 180])) {   // staat de tekst op zijn kop? probeer beide
+        const { data } = await worker.recognize(rot(ln.canvas, deg));
+        if (!best || data.confidence > best.conf) best = { text: data.text, conf: data.confidence };
+      }
+      all.push(best);
+    }
+  }
+  return all;
+}
+
+function handleResults(codes, lines) {
+  const scored = [];
+  codes.forEach(c => scored.push([200, normSerial(c)]));
+  lines.forEach(l => {
+    let t = l.text.replace(/^\s*(S\/?N|SER(?:IAL)?\.?(?:\s*NO\.?)?)\s*[:.#-]?\s*/i, '');
+    t = squash(t).replace(/^[^A-Z0-9]+|[^A-Z0-9]+$/g, '');
+    if (l.conf < (AHRE.test(t) ? 25 : 45) || t.length < 7 || !/\d/.test(t) || !/[A-Z]/.test(t) || !/^[A-Z0-9\-\/.]+$/.test(t)) return;
+    scored.push([l.conf + (AHRE.test(t) ? 100 : 0), t]);
+  });
+  scored.sort((a, b) => b[0] - a[0]);
+  const uniq = [...new Set(scored.map(s => s[1]))].slice(0, 10);
+  if (uniq[0] && !$('serial').value) { $('serial').value = uniq[0]; checkDup(); }
+  chips($('serialChips'), uniq, t => { $('serial').value = t; checkDup(); });
+
+  const txt = lines.filter(l => l.conf >= 20).map(l => squash(l.text)).join(' ');
+  const ahs = [];
+  for (const m of txt.matchAll(/V(\d+(?:[.,]\d+)?)AH/g)) ahs.push(key(num(m[1])));
+  for (const m of txt.matchAll(/(\d{3,6})MAH/g)) ahs.push(key(+m[1] / 1000));
+  for (const m of txt.matchAll(/(?<![\dV.,])(\d{1,3}(?:[.,]\d{1,2})?)AH/g)) ahs.push(key(num(m[1])));
+  const v = txt.match(/(\d{2})V/), wh = txt.match(/(\d{3,4}(?:[.,]\d)?)WH/);
+  if (v && wh) ahs.push(key(num(wh[1]) / +v[1]));
+  const ahU = [...new Set(ahs)].filter(x => +x > 0 && +x < 200);
+  if (ahU.length && !$('ah').value) { $('ah').value = fmt(ahU[0]); updateWeight(); }
+  chips($('ahChips'), ahU.map(fmt), t => { $('ah').value = t; updateWeight(); });
+
+  status(uniq.length ? 'Controleer en corrigeer indien nodig. Tik een voorstel om te kiezen.' : 'Niets herkend — vul handmatig in.');
+}
+
+/* ---------- velden ---------- */
+function checkDup() {
+  const s = normSerial($('serial').value);
+  $('dupWarn').textContent = s && records.some(r => r.serial === s) ? 'ℹ Dit serienummer is al geregistreerd; het wordt als DUBBEL genoteerd.' : '';
+}
+function updateWeight() {
+  const a = num($('ah').value);
+  if (a === null) { $('kgAsk').classList.add('hide'); return; }
+  const w = weights[key(a)];
+  if (w !== undefined) { $('kg').value = fmt(w); $('kgAsk').classList.add('hide'); }
+  else { $('kg').value = ''; $('kgAsk').classList.remove('hide'); }
+}
+// Staat de Ah in het serienummer (bijv. HLM-XNW36v21ah2025... of LN-36V16.8AH-G29...), dan vullen we die automatisch in.
+$('serial').oninput = () => {
+  checkDup();
+  const m = squash($('serial').value).match(/V(\d+(?:[.,]\d+)?)AH/);
+  if (m && !ahTyped) { $('ah').value = fmt(key(num(m[1]))); updateWeight(); }
+};
+let ahTyped = false;
+$('ah').oninput = () => { ahTyped = true; updateWeight(); };
+
+$('reset').onclick = clearForm;
+function clearForm() {
+  ['serial', 'ah', 'kg'].forEach(i => $(i).value = ''); ahTyped = false;
+  const l = store.get('last', {}); $('sup').value = l.sup || ''; $('typ').value = l.typ || '';
+  $('serialChips').innerHTML = ''; $('ahChips').innerHTML = '';
+  $('dupWarn').textContent = ''; $('kgAsk').classList.add('hide');
+  $('preview').style.display = 'none'; status('');
+}
+
+$('save').onclick = async () => {
+  const serial = normSerial($('serial').value), ah = num($('ah').value), kg = num($('kg').value);
+  if (!serial) return alert('Serienummer ontbreekt.');
+  if (ah === null) return alert('Ah ontbreekt.');
+  if (kg === null) return alert('Gewicht ontbreekt — vul het gewicht in.');
+  const sup = $('sup').value, typ = $('typ').value;
+  if (!sup || !typ) return alert('Kies leverancier en type.');
+  store.set('last', { sup, typ });
+  weights[key(ah)] = kg; store.set('weights', weights);
+  const ts = Date.now();
+  records.push({ id: ts + '-' + Math.random().toString(36).slice(2, 6), serial, kg, ah, sup, typ, ts, dup: records.some(r => r.serial === serial), synced: false });
+  store.set('records', records);
+  clearForm(); render(); loadSettings();
+  await sync();
+};
+
+/* ---------- sync naar Google Sheets ---------- */
+// Apps Script web-app: no-cors + text/plain voorkomt preflight. Het script negeert dubbel verstuurde id's.
+const post = body => fetch(hook, { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body) });
+const dateStr = ts => { const d = new Date(ts), p = n => String(n).padStart(2, '0'); return p(d.getDate()) + '-' + p(d.getMonth() + 1) + '-' + d.getFullYear() + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()); };
+async function sync() {
+  if (!hook) return;
+  try {
+    while (pendingDel.length) { await post({ action: 'delete', id: pendingDel[0] }); pendingDel.shift(); store.set('pendingDel', pendingDel); }
+    for (const r of records) {
+      if (r.synced) continue;
+      await post({ action: 'add', id: r.id, serial: r.serial, kg: r.kg, ah: r.ah, sup: r.sup, typ: r.typ, date: dateStr(r.ts) });
+      r.synced = true; store.set('records', records); render();
+    }
+  } catch {} // offline: later opnieuw
+}
+$('retry').onclick = sync;
+window.addEventListener('online', sync);
+
+/* ---------- lijst / export ---------- */
+function render() {
+  $('count').textContent = records.length + ' stuks'; $('n2').textContent = records.length;
+  const tb = $('tbl').tBodies[0]; tb.innerHTML = '';
+  records.slice().reverse().forEach(r => {
+    const tr = tb.insertRow();
+    tr.insertCell().textContent = r.serial + (r.dup ? ' (DUBBEL)' : '') + ' · ' + (r.sup || '?') + ' / ' + (r.typ || '?');
+    tr.insertCell().textContent = fmt(r.kg);
+    tr.insertCell().textContent = fmt(r.ah);
+    const s = tr.insertCell(); s.textContent = hook ? (r.synced ? '✓' : '…') : ''; s.className = r.synced ? 'sync-ok' : 'sync-wait';
+    const d = tr.insertCell(); const b = document.createElement('button'); b.className = 'small sec'; b.textContent = '✕';
+    b.onclick = () => {
+      if (!confirm('Verwijderen' + (r.synced ? ' (ook uit de Google Sheet)' : '') + '?\n' + r.serial)) return;
+      records.splice(records.indexOf(r), 1); store.set('records', records);
+      if (r.synced && hook) { pendingDel.push(r.id); store.set('pendingDel', pendingDel); sync(); }
+      render();
+    };
+    d.appendChild(b);
+  });
+}
+$('csv').onclick = () => {
+  const rows = [['Serienummer', 'Gewicht (kg)', 'AH', 'Leverancier', 'Type', 'Datum', 'Dubbel'], ...records.map(r => [r.serial, r.kg, r.ah, r.sup || '', r.typ || '', dateStr(r.ts), r.dup ? 'DUBBEL' : ''])];
+  const csv = '﻿' + rows.map(r => r.map(v => '"' + String(v).replace(/"/g, '""') + '"').join(';')).join('\r\n');
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+  a.download = 'accu-registratie.csv'; a.click();
+};
+
+/* ---------- instellingen ---------- */
+function loadSettings() {
+  $('hook').value = hook;
+  $('wt').value = Object.entries(weights).map(([k, v]) => k + '=' + v).join('\n');
+}
+$('saveSet').onclick = () => {
+  hook = $('hook').value.trim(); store.set('hook', hook);
+  const w = {};
+  $('wt').value.split('\n').forEach(l => { const [a, b] = l.split('='); const A = num(a || ''), B = num(b || ''); if (A !== null && B !== null) w[key(A)] = B; });
+  weights = w; store.set('weights', weights);
+  render(); sync(); alert('Opgeslagen.');
+};
+
+// leverancier/type: laatst gekozen waarde onthouden (handig bij een stapel van dezelfde soort); HLM wordt uit het serienummer afgeleid
+const last = store.get('last', {}); $('sup').value = last.sup || ''; $('typ').value = last.typ || '';
+$('serial').addEventListener('input', () => { if (/^HLM/.test(normSerial($('serial').value))) $('sup').value = 'HLM'; });
+loadSettings(); render(); sync();
+</script>
+</body>
+</html>
+
