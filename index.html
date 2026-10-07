@@ -36,7 +36,7 @@
 <body>
 <h1>BAZZ accu registratie <span id="count" style="font-size:14px;color:var(--mute)"></span></h1>
 <!-- Versie: bij elke wijziging ophogen, zodat op de telefoon te zien is welke versie er draait. -->
-<div id="ver" style="font-size:12px;color:var(--mute);margin:-8px 0 10px">versie 1.1 · 07-10-2026 12:20 · barcode-rotatie</div>
+<div id="ver" style="font-size:12px;color:var(--mute);margin:-8px 0 10px">versie 1.2 · 07-10-2026 · foto lezen via Google Drive</div>
 
 <div class="card">
   <input type="file" id="file" accept="image/*" capture="environment" class="hide">
@@ -111,10 +111,12 @@ const normSerial = s => String(s).toUpperCase().replace(/\s+/g, '');
 const toLetters = t => t.replace(/0/g, 'Q');
 function canonSerial(raw) {
   const s = String(raw).toUpperCase().replace(/\s+/g, '').replace(/[–—_]/g, '-');
-  let m = s.match(/^LN-?\d+V\d+(?:[.,]\d+)?AH-?G29-?([A-Z0-9]{2})-?([A-Z0-9]{2})-?([0-9O]{6,8})$/);
+  let m = s.match(/^LN-?\d+V\d+(?:[.,]\d+)?AH-?[G0]29-?([A-Z0-9]{2})-?([A-Z0-9]{2})-?([0-9O]{6,8})$/);
   if (m) return 'LNA22G29' + toLetters(m[1] + m[2]) + m[3].replace(/O/g, '0');
-  m = s.match(/^(?:LN|N)?A22G29-?([A-Z0-9]{4})-?([0-9O]{6,8})$/);
+  m = s.match(/^(?:LN|N)?A22[G0]29-?([A-Z0-9]{4})-?([0-9O]{6,8})$/);          // sticker; de L is soms afgescheurd, G wordt wel eens 0 gelezen
   if (m) return 'LNA22G29' + toLetters(m[1]) + m[2].replace(/O/g, '0');
+  m = s.match(/^HLM-?XNW36[V1I]?(\d{2})AH(\d{8})(\d{3})$/);                     // HLM: herstel een weggevallen/verlezen "V" (36v21ah -> 36121ah)
+  if (m) return 'HLM-XNW36V' + m[1] + 'AH' + m[2] + m[3];
   return s;
 }
 const num = s => { const n = parseFloat(String(s).replace(',', '.')); return isFinite(n) ? n : null; };
@@ -139,11 +141,19 @@ async function processFile(f) {
   try {
     const img = await loadImage(url);
     const canvas = toCanvas(img, 1800);
-    status('Barcode zoeken…');
-    const codes = await readBarcodes(canvas);
-    status('Tekst lezen (eerste keer duurt langer)…');
-    const lines = await readText(canvas);
-    handleResults(codes, lines);
+    // 1) Google Drive laat de foto lezen via je eigen script (gratis, veel nauwkeuriger); 2) anders lokaal (barcode + Tesseract)
+    let lines = [], codes = [], note = '';
+    if (hook) {
+      status('Foto laten lezen door Google…');
+      try { lines = await driveOcr(canvas); } catch (err) { note = ' (Google-lezen mislukt: ' + err.message + ')'; }
+    } else note = ' (stel de Sheet-link in bij Instellingen voor betere herkenning)';
+    if (!extractSerials(lines).length) {
+      status('Lokaal lezen…' + note);
+      codes = await readBarcodes(canvas);
+      status('Tekst lezen (eerste keer duurt langer)…');
+      lines = lines.concat(await readText(canvas));
+    }
+    handleResults(codes, lines, note);
   } catch (err) {
     status('Lezen mislukt: ' + err.message + ' — vul handmatig in.');
   }
@@ -294,22 +304,52 @@ async function readText(canvas) {
   return all;
 }
 
-function handleResults(codes, lines) {
+/* Foto naar het Apps Script sturen; dat laat Google Drive de tekst lezen (OCR) en geeft de regels terug. */
+async function driveOcr(canvas) {
+  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 45000);
+  try {
+    const image = canvas.toDataURL('image/jpeg', 0.85).split(',')[1];
+    const r = await fetch(hook, { method: 'POST', signal: ctl.signal, headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'ocr', image }) });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || 'onbekende fout');
+    return (j.text || '').split(/\r?\n/).filter(t => t.trim()).map(text => ({ text, conf: 90 }));
+  } catch (e) { throw new Error(e.name === 'AbortError' ? 'te lang gewacht' : e.message); }
+  finally { clearTimeout(timer); }
+}
+
+// Bekende serienummerpatronen (ook midden in een regel met andere tekst, en met kleine leesfouten)
+const SERIAL_RES = [
+  /LN-?\d+V\d+(?:[.,]\d+)?AH-?[G0]29-?[A-Z0-9]{2}-?[A-Z0-9]{2}-?[0-9O]{6,8}/,   // LN gegraveerd
+  /(?:LN|N)?A22[G0]29[A-Z0-9]{4}[0-9O]{6,8}/,                                    // LN sticker
+  /HLM-?[A-Z0-9]{3,14}AH\d{8}\d{3}/                                              // HLM gegraveerd
+];
+function extractSerials(lines) {
+  const found = [];
+  for (const l of lines) {
+    const t = squash(l.text);
+    for (const re of SERIAL_RES) { const m = t.match(re); if (m) found.push(canonSerial(m[0])); }
+  }
+  return [...new Set(found)];
+}
+
+function handleResults(codes, lines, note) {
+  const known = extractSerials(lines);
   const scored = [];
   codes.forEach(c => scored.push([200, normSerial(c)]));
-  lines.forEach(l => {
+  if (!known.length) lines.forEach(l => {
     let t = l.text.replace(/^\s*(S\/?N|SER(?:IAL)?\.?(?:\s*NO\.?)?)\s*[:.#-]?\s*/i, '');
     t = squash(t).replace(/^[^A-Z0-9]+|[^A-Z0-9]+$/g, '');
     if (l.conf < (AHRE.test(t) ? 25 : 45) || t.length < 7 || !/\d/.test(t) || !/[A-Z]/.test(t) || !/^[A-Z0-9\-\/.]+$/.test(t)) return;
     scored.push([l.conf + (AHRE.test(t) ? 100 : 0), t]);
   });
   scored.sort((a, b) => b[0] - a[0]);
-  const uniq = [...new Set(scored.map(s => s[1]))].slice(0, 10);
+  const uniq = known.length ? known.slice(0, 4) : [...new Set(scored.map(s => s[1]))].slice(0, 8);
   if (uniq[0] && !$('serial').value) setSerial(uniq[0]);
   chips($('serialChips'), uniq.map(canonSerial).filter((t, i, a) => a.indexOf(t) === i), setSerial);
 
   const txt = lines.filter(l => l.conf >= 20).map(l => squash(l.text)).join(' ');
   const ahs = [];
+  for (const s of known) { const h = s.match(/^HLM.*?(\d{2})AH\d{8}/); if (h) ahs.push(key(+h[1])); }   // HLM: Ah staat in het nummer
   for (const m of txt.matchAll(/V(\d+(?:[.,]\d+)?)AH/g)) ahs.push(key(num(m[1])));
   for (const m of txt.matchAll(/(\d{3,6})MAH/g)) ahs.push(key(+m[1] / 1000));
   for (const m of txt.matchAll(/(?<![\dV.,])(\d{1,3}(?:[.,]\d{1,2})?)AH/g)) ahs.push(key(num(m[1])));
@@ -319,7 +359,7 @@ function handleResults(codes, lines) {
   if (ahU.length && !$('ah').value) { $('ah').value = fmt(ahU[0]); updateWeight(); }
   chips($('ahChips'), ahU.map(fmt), t => { $('ah').value = t; updateWeight(); });
 
-  status(uniq.length ? 'Controleer en corrigeer indien nodig. Tik een voorstel om te kiezen.' : 'Niets herkend — vul handmatig in.');
+  status((uniq.length ? 'Controleer en corrigeer indien nodig. Tik een voorstel om te kiezen.' : 'Niets herkend — vul handmatig in.') + (note || ''));
 }
 
 /* ---------- velden ---------- */
