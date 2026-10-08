@@ -36,7 +36,7 @@
 <body>
 <h1>BAZZ accu registratie <span id="count" style="font-size:14px;color:var(--mute)"></span></h1>
 <!-- Versie: bij elke wijziging ophogen, zodat op de telefoon te zien is welke versie er draait. -->
-<div id="ver" style="font-size:12px;color:var(--mute);margin:-8px 0 10px">versie 2.1 · 07-10-2026 · lijst en teller uit de Sheet</div>
+<div id="ver" style="font-size:12px;color:var(--mute);margin:-8px 0 10px">versie 2.2 · 08-10-2026 · Ah automatisch uit TY-voorvoegsel</div>
 <button id="upd" type="button" class="hide" style="background:#c5221f;margin:0 0 10px">Er staat een nieuwe versie online — tik om te vernieuwen</button>
 <button id="vdmBtn" type="button" class="sec" style="margin:0 0 10px"></button>
 <div class="card" style="padding:10px 12px">
@@ -420,9 +420,20 @@ function updateWeight() {
   else { $('kg').value = ''; $('kgAsk').classList.remove('hide'); }
 }
 // Staat de Ah in het serienummer (bijv. HLM-XNW36v21ah2025... of LN-36V16.8AH-G29...), dan vullen we die automatisch in.
+// Vaste voorvoegsels (SABER, TY...) met bekende capaciteit. Langste voorvoegsel wint; handmatig getypte Ah blijft staan.
+const AH_PREFIX = [['TY082236', 15.6], ['TY085536182', 18.2], ['TY08503', 20.8]];
+function ahFromPrefix(raw) {
+  const s = canonSerial(raw);
+  let best = null;
+  for (const [p, ah] of AH_PREFIX) if (s.startsWith(p) && (!best || p.length > best[0].length)) best = [p, ah];
+  return best ? best[1] : null;
+}
 function deriveAh(raw) {
+  if (ahTyped) return;
+  const pre = ahFromPrefix(raw);
+  if (pre !== null) { $('ah').value = fmt(pre); updateWeight(); return; }
   const m = squash(raw).match(/V(\d+(?:[.,]\d+)?)AH/);
-  if (m && !ahTyped) { $('ah').value = fmt(key(num(m[1]))); updateWeight(); }
+  if (m) { $('ah').value = fmt(key(num(m[1]))); updateWeight(); }
 }
 function setSerial(raw) { deriveAh(raw); $('serial').value = canonSerial(raw); checkDup(); applySupplier(); }
 $('serial').oninput = () => { checkDup(); deriveAh($('serial').value); };
